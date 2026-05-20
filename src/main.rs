@@ -264,7 +264,7 @@ async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
             snippet
         };
         println!(
-            "[{}] {} → {}  {}",
+            "[{}] {} → {} {}",
             doc.doc_id,
             format_time(doc.started_at),
             format_time(doc.ended_at),
@@ -304,7 +304,7 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
                 }
                 let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
                 let title = title_for(client, cfg, &text).await?;
-                println!("[{}] {} → {}  {}", doc.doc_id, format_time(doc.started_at), format_time(doc.ended_at), title);
+                println!("[{}] {} → {} {}", doc.doc_id, format_time(doc.started_at), format_time(doc.ended_at), title);
             }
         }
     }
@@ -351,11 +351,10 @@ async fn cmd_search(client: &Client, cfg: &Config, query: &str, limit: u32) -> R
         let score = h.score.map(|s| format!(" [{:.2}]", s)).unwrap_or_default();
         let snippet = h.snippet.unwrap_or_default();
         println!(
-            "[doc:{}] {} → {}  ({} entries){}",
+            "[{}] {} → {}{}",
             h.doc_id,
             format_time(h.started_at),
             format_time(h.ended_at),
-            h.entry_count,
             score,
         );
         println!("  {}", snippet);
