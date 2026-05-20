@@ -204,43 +204,24 @@ async fn title_for(client: &Client, cfg: &Config, text: &str) -> Result<String> 
 }
 
 async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Result<DocSummary> {
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "title": {
-                "type": "string",
-                "description": "Short title (5-8 words, no trailing punctuation)"
-            },
-            "summary": {
-                "type": "string",
-                "description": "Markdown summary using ## and below for headers"
-            }
-        },
-        "required": ["title", "summary"],
-        "additionalProperties": false
-    });
-
     let content = chat(client, cfg, ChatRequest {
         model: cfg.openai_model.clone(),
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: "Du bist ein gründlicher Zusammenfasser. Antworte ausschließlich auf Deutsch. Gib ein JSON-Objekt zurück mit einem kurzen Titel (5-8 Wörter, kein abschließendes Satzzeichen) und einer umfassenden Markdown-Zusammenfassung im Feld `summary`. Nutze Markdown ausgiebig: ## Abschnittsüberschriften für jedes Thema (es MUSS mindestens eine ## Überschrift geben), Aufzählungslisten für Details, **Fettdruck** für Schlüsselbegriffe und mehrere Absätze. Die Zusammenfassung MUSS ein langer mehrzeiliger Text sein. Erfasse alle Themen, Entscheidungen und Details — kürze nichts ab.".into(),
+                content: "You are a thorough summarizer. Respond with a raw JSON object (no markdown fences) with two fields: \"title\" (5-8 words, no trailing punctuation) and \"summary\" (a comprehensive Markdown string). In the summary, use ## section headers for each topic, bullet lists for details, **bold** for key terms, and write multiple paragraphs. The summary must be long and cover every topic, decision, and detail without truncation.".into(),
             },
             ChatMessage { role: "user".into(), content: format!("Summarize this transcript:\n\n{}", text) },
         ],
         stream: false,
-        response_format: Some(ResponseFormat {
-            kind: "json_schema".into(),
-            json_schema: JsonSchema {
-                name: "doc_summary".into(),
-                schema,
-            },
-        }),
+        response_format: None,
     })
     .await?;
 
-    serde_json::from_str::<DocSummary>(&content).context("failed to parse structured summary response")
+    let trimmed = content.trim();
+    let json_str = trimmed.strip_prefix("```json").or_else(|| trimmed.strip_prefix("```")).unwrap_or(trimmed);
+    let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
+    serde_json::from_str::<DocSummary>(json_str).context("failed to parse summary response as JSON")
 }
 
 async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
