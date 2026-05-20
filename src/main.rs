@@ -50,11 +50,11 @@ impl Config {
 
 #[derive(Deserialize)]
 struct Document {
-    id: u64,
+    doc_id: String,
     started_at: f64,
     ended_at: f64,
     entry_count: u64,
-    preview: Option<String>,
+    snippet: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,12 +70,13 @@ struct Entry {
 
 #[derive(Deserialize)]
 struct DocumentDetail {
+    doc_id: String,
     entries: Vec<Entry>,
 }
 
 #[derive(Deserialize)]
 struct SearchResult {
-    doc_id: Option<u64>,
+    doc_id: Option<String>,
     text: String,
     source: Option<String>,
     started_at: Option<f64>,
@@ -134,7 +135,7 @@ async fn fetch_documents(client: &Client, cfg: &Config) -> Result<Vec<Document>>
     Ok(resp.documents)
 }
 
-async fn fetch_document(client: &Client, cfg: &Config, id: u64) -> Result<DocumentDetail> {
+async fn fetch_document(client: &Client, cfg: &Config, id: &str) -> Result<DocumentDetail> {
     client
         .get(format!("{}/document/{}", cfg.al_url, id))
         .header("Authorization", format!("Bearer {}", cfg.al_psk))
@@ -186,31 +187,31 @@ async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
         return Ok(());
     }
     for doc in docs {
-        let preview = doc.preview.unwrap_or_default();
-        let preview = if preview.len() > 80 {
-            format!("{}…", &preview[..80])
+        let snippet = doc.snippet.unwrap_or_default();
+        let snippet = if snippet.len() > 80 {
+            format!("{}…", &snippet[..80])
         } else {
-            preview
+            snippet
         };
         println!(
             "[{}] {} → {}  ({} entries)  {}",
-            doc.id,
+            doc.doc_id,
             format_time(doc.started_at),
             format_time(doc.ended_at),
             doc.entry_count,
-            preview,
+            snippet,
         );
     }
     Ok(())
 }
 
 async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<u64>) -> Result<()> {
-    let ids: Vec<u64> = match doc_id {
-        Some(id) => vec![id],
+    let ids: Vec<String> = match doc_id {
+        Some(id) => vec![id.to_string()],
         None => fetch_documents(client, cfg)
             .await?
             .into_iter()
-            .map(|d| d.id)
+            .map(|d| d.doc_id)
             .collect(),
     };
 
@@ -219,7 +220,7 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<u64>) -> Re
         return Ok(());
     }
 
-    for id in ids {
+    for id in &ids {
         let detail = fetch_document(client, cfg, id).await?;
         if detail.entries.is_empty() {
             println!("Document {id}: (empty)");
@@ -232,7 +233,7 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<u64>) -> Re
             .collect::<Vec<_>>()
             .join(" ");
 
-        println!("=== Document {id} ===");
+        println!("=== Document {} ===", detail.doc_id);
         let summary = summarize_text(client, cfg, &text).await?;
         println!("{summary}");
         println!();
@@ -277,6 +278,7 @@ async fn cmd_search(client: &Client, cfg: &Config, query: &str, limit: u32) -> R
         let score = r.score.map(|s| format!(" [{:.2}]", s)).unwrap_or_default();
         let doc = r
             .doc_id
+            .as_deref()
             .map(|id| format!(" doc:{}", id))
             .unwrap_or_default();
         let source = r.source.as_deref().unwrap_or("?");
