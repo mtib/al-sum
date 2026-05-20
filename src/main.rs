@@ -228,6 +228,14 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
             let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
             let title = title_for(client, cfg, &text).await?;
             let summary = summary_for(client, cfg, &text).await?;
+            // Strip any H1 the model may have added despite instructions
+            let summary = summary
+                .lines()
+                .skip_while(|l| l.starts_with("# "))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim_start()
+                .to_string();
             println!("# {title}");
             println!();
             println!("{summary}");
