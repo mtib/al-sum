@@ -14,11 +14,11 @@ struct Cli {
 enum Command {
     /// List available documents
     List,
-    /// Summarize one or all documents
+    /// Summarize documents. Without --doc: print [id] title for each. With --doc: print title + full summary.
     Summarize {
-        /// Document ID to summarize (omit to summarize all)
+        /// Document ID to summarize in full (omit for title overview of all docs)
         #[arg(long)]
-        doc: Option<u64>,
+        doc: Option<String>,
     },
     /// Search documents (hybrid text + semantic)
     Search {
@@ -65,7 +65,6 @@ struct DocumentsResponse {
 #[derive(Deserialize)]
 struct Entry {
     text: String,
-    source: String,
 }
 
 #[derive(Deserialize)]
@@ -75,17 +74,18 @@ struct DocumentDetail {
 }
 
 #[derive(Deserialize)]
-struct SearchResult {
-    doc_id: Option<String>,
-    text: String,
-    source: Option<String>,
-    started_at: Option<f64>,
+struct HybridHit {
+    doc_id: String,
+    snippet: Option<String>,
+    started_at: f64,
+    ended_at: f64,
+    entry_count: u64,
     score: Option<f64>,
 }
 
 #[derive(Deserialize)]
-struct SearchResponse {
-    results: Vec<SearchResult>,
+struct HybridResponse {
+    hits: Vec<HybridHit>,
 }
 
 #[derive(Serialize)]
@@ -147,22 +147,15 @@ async fn fetch_document(client: &Client, cfg: &Config, id: &str) -> Result<Docum
         .context("failed to parse document detail")
 }
 
-async fn summarize_text(client: &Client, cfg: &Config, text: &str) -> Result<String> {
+async fn llm(client: &Client, cfg: &Config, system: &str, user: &str) -> Result<String> {
     let req = ChatRequest {
         model: cfg.openai_model.clone(),
         messages: vec![
-            ChatMessage {
-                role: "system".into(),
-                content: "You are a concise summarizer. Summarize the transcript in a few sentences, capturing the main topics discussed.".into(),
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: format!("Summarize this transcript:\n\n{}", text),
-            },
+            ChatMessage { role: "system".into(), content: system.into() },
+            ChatMessage { role: "user".into(), content: user.into() },
         ],
         stream: false,
     };
-
     let resp = client
         .post(format!("{}/v1/chat/completions", cfg.openai_base_url))
         .header("Authorization", format!("Bearer {}", cfg.openai_api_key))
@@ -172,12 +165,31 @@ async fn summarize_text(client: &Client, cfg: &Config, text: &str) -> Result<Str
         .error_for_status()?
         .json::<ChatResponse>()
         .await?;
-
     resp.choices
         .into_iter()
         .next()
         .map(|c| c.message.content)
         .context("no choices in response")
+}
+
+async fn title_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
+    llm(
+        client,
+        cfg,
+        "You are a concise title generator. Reply with only a short title (5-8 words) for the transcript. No punctuation at the end.",
+        &format!("Generate a title for this transcript:\n\n{}", text),
+    )
+    .await
+}
+
+async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
+    llm(
+        client,
+        cfg,
+        "You are a concise summarizer. Summarize the transcript in a few sentences, capturing the main topics discussed.",
+        &format!("Summarize this transcript:\n\n{}", text),
+    )
+    .await
 }
 
 async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
@@ -205,85 +217,71 @@ async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<u64>) -> Result<()> {
-    let ids: Vec<String> = match doc_id {
-        Some(id) => vec![id.to_string()],
-        None => fetch_documents(client, cfg)
-            .await?
-            .into_iter()
-            .map(|d| d.doc_id)
-            .collect(),
-    };
-
-    if ids.is_empty() {
-        println!("No documents found.");
-        return Ok(());
-    }
-
-    for id in &ids {
-        let detail = fetch_document(client, cfg, id).await?;
-        if detail.entries.is_empty() {
-            println!("Document {id}: (empty)");
-            continue;
+async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) -> Result<()> {
+    match doc_id {
+        Some(id) => {
+            let detail = fetch_document(client, cfg, &id).await?;
+            if detail.entries.is_empty() {
+                println!("(empty)");
+                return Ok(());
+            }
+            let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
+            let title = title_for(client, cfg, &text).await?;
+            let summary = summary_for(client, cfg, &text).await?;
+            println!("{title}");
+            println!();
+            println!("{summary}");
         }
-        let text = detail
-            .entries
-            .iter()
-            .map(|e| e.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        println!("=== Document {} ===", detail.doc_id);
-        let summary = summarize_text(client, cfg, &text).await?;
-        println!("{summary}");
-        println!();
+        None => {
+            let docs = fetch_documents(client, cfg).await?;
+            if docs.is_empty() {
+                println!("No documents found.");
+                return Ok(());
+            }
+            for doc in docs {
+                let detail = fetch_document(client, cfg, &doc.doc_id).await?;
+                if detail.entries.is_empty() {
+                    println!("[{}] (empty)", doc.doc_id);
+                    continue;
+                }
+                let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
+                let title = title_for(client, cfg, &text).await?;
+                println!("[{}] {}", doc.doc_id, title);
+            }
+        }
     }
     Ok(())
 }
 
 async fn cmd_search(client: &Client, cfg: &Config, query: &str, limit: u32) -> Result<()> {
-    let hybrid_resp = client
+    let hits = client
         .get(format!("{}/search/hybrid", cfg.al_url))
         .header("Authorization", format!("Bearer {}", cfg.al_psk))
         .query(&[("q", query), ("limit", &limit.to_string())])
         .send()
-        .await?;
+        .await?
+        .error_for_status()?
+        .json::<HybridResponse>()
+        .await?
+        .hits;
 
-    let results = if hybrid_resp.status() == 404 {
-        client
-            .get(format!("{}/search", cfg.al_url))
-            .header("Authorization", format!("Bearer {}", cfg.al_psk))
-            .query(&[("q", query), ("limit", &limit.to_string())])
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<SearchResponse>()
-            .await?
-            .results
-    } else {
-        hybrid_resp
-            .error_for_status()?
-            .json::<SearchResponse>()
-            .await?
-            .results
-    };
-
-    if results.is_empty() {
+    if hits.is_empty() {
         println!("No results.");
         return Ok(());
     }
 
-    for r in results {
-        let time = r.started_at.map(format_time).unwrap_or_default();
-        let score = r.score.map(|s| format!(" [{:.2}]", s)).unwrap_or_default();
-        let doc = r
-            .doc_id
-            .as_deref()
-            .map(|id| format!(" doc:{}", id))
-            .unwrap_or_default();
-        let source = r.source.as_deref().unwrap_or("?");
-        println!("{time}{doc} ({source}){score}");
-        println!("  {}", r.text);
+    for h in hits {
+        let score = h.score.map(|s| format!(" [{:.2}]", s)).unwrap_or_default();
+        let snippet = h.snippet.unwrap_or_default();
+        println!(
+            "[doc:{}] {} → {}  ({} entries){}",
+            h.doc_id,
+            format_time(h.started_at),
+            format_time(h.ended_at),
+            h.entry_count,
+            score,
+        );
+        println!("  {}", snippet);
         println!();
     }
     Ok(())
