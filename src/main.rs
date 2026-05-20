@@ -186,7 +186,7 @@ async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String
     llm(
         client,
         cfg,
-        "You are a concise summarizer. Summarize the transcript in a few sentences, capturing the main topics discussed.",
+        "You are a concise summarizer. Summarize the transcript in Markdown. Use ## and below for any section headers (the caller provides the H1 title). Capture the main topics discussed.",
         &format!("Summarize this transcript:\n\n{}", text),
     )
     .await
@@ -228,7 +228,7 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
             let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
             let title = title_for(client, cfg, &text).await?;
             let summary = summary_for(client, cfg, &text).await?;
-            println!("{title}");
+            println!("# {title}");
             println!();
             println!("{summary}");
         }
