@@ -203,25 +203,28 @@ async fn title_for(client: &Client, cfg: &Config, text: &str) -> Result<String> 
     .await
 }
 
-async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Result<DocSummary> {
-    let content = chat(client, cfg, ChatRequest {
+async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
+    chat(client, cfg, ChatRequest {
         model: cfg.openai_model.clone(),
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a thorough summarizer. Respond with a raw JSON object (no markdown fences) with two fields: \"title\" (5-8 words, no trailing punctuation) and \"summary\" (a comprehensive Markdown string). In the summary, use ## section headers for each topic, bullet lists for details, **bold** for key terms, and write multiple paragraphs. The summary must be long and cover every topic, decision, and detail without truncation.".into(),
+                content: "You are a thorough summarizer. Write a Markdown summary of the transcript. Start directly with a ## section header — do not write any introduction. Use one ## header per topic, bullet points for details under each header, and **bold** for key terms. Cover every topic and decision. Do not truncate.".into(),
             },
             ChatMessage { role: "user".into(), content: format!("Summarize this transcript:\n\n{}", text) },
         ],
         stream: false,
         response_format: None,
     })
-    .await?;
+    .await
+}
 
-    let trimmed = content.trim();
-    let json_str = trimmed.strip_prefix("```json").or_else(|| trimmed.strip_prefix("```")).unwrap_or(trimmed);
-    let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
-    serde_json::from_str::<DocSummary>(json_str).context("failed to parse summary response as JSON")
+async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Result<DocSummary> {
+    let (title, summary) = tokio::try_join!(
+        title_for(client, cfg, text),
+        summary_for(client, cfg, text),
+    )?;
+    Ok(DocSummary { title, summary })
 }
 
 async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
