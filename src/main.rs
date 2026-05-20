@@ -95,10 +95,25 @@ struct ChatMessage {
 }
 
 #[derive(Serialize)]
+struct JsonSchema {
+    name: String,
+    schema: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    kind: String,
+    json_schema: JsonSchema,
+}
+
+#[derive(Serialize)]
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +129,12 @@ struct ChatMessageResponse {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+}
+
+#[derive(Deserialize)]
+struct DocSummary {
+    title: String,
+    summary: String,
 }
 
 fn format_time(ts: f64) -> String {
@@ -147,15 +168,7 @@ async fn fetch_document(client: &Client, cfg: &Config, id: &str) -> Result<Docum
         .context("failed to parse document detail")
 }
 
-async fn llm(client: &Client, cfg: &Config, system: &str, user: &str) -> Result<String> {
-    let req = ChatRequest {
-        model: cfg.openai_model.clone(),
-        messages: vec![
-            ChatMessage { role: "system".into(), content: system.into() },
-            ChatMessage { role: "user".into(), content: user.into() },
-        ],
-        stream: false,
-    };
+async fn chat(client: &Client, cfg: &Config, req: ChatRequest) -> Result<String> {
     let resp = client
         .post(format!("{}/v1/chat/completions", cfg.openai_base_url))
         .header("Authorization", format!("Bearer {}", cfg.openai_api_key))
@@ -173,23 +186,59 @@ async fn llm(client: &Client, cfg: &Config, system: &str, user: &str) -> Result<
 }
 
 async fn title_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
-    llm(
-        client,
-        cfg,
-        "You are a concise title generator. Reply with only a short title (5-8 words) for the transcript. No punctuation at the end.",
-        &format!("Generate a title for this transcript:\n\n{}", text),
-    )
+    chat(client, cfg, ChatRequest {
+        model: cfg.openai_model.clone(),
+        messages: vec![
+            ChatMessage {
+                role: "system".into(),
+                content: "You are a concise title generator. Reply with only a short title (5-8 words) for the transcript. No punctuation at the end.".into(),
+            },
+            ChatMessage { role: "user".into(), content: format!("Generate a title for this transcript:\n\n{}", text) },
+        ],
+        stream: false,
+        response_format: None,
+    })
     .await
 }
 
-async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
-    llm(
-        client,
-        cfg,
-        "You are a concise summarizer. Summarize the transcript in Markdown. Use ## and below for any section headers (the caller provides the H1 title). Capture the main topics discussed.",
-        &format!("Summarize this transcript:\n\n{}", text),
-    )
-    .await
+async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Result<DocSummary> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "Short title (5-8 words, no trailing punctuation)"
+            },
+            "summary": {
+                "type": "string",
+                "description": "Markdown summary using ## and below for headers"
+            }
+        },
+        "required": ["title", "summary"],
+        "additionalProperties": false
+    });
+
+    let content = chat(client, cfg, ChatRequest {
+        model: cfg.openai_model.clone(),
+        messages: vec![
+            ChatMessage {
+                role: "system".into(),
+                content: "You are a concise summarizer. Return a JSON object with a short title (5-8 words, no trailing punctuation) and a Markdown summary using ## and below for any headers.".into(),
+            },
+            ChatMessage { role: "user".into(), content: format!("Summarize this transcript:\n\n{}", text) },
+        ],
+        stream: false,
+        response_format: Some(ResponseFormat {
+            kind: "json_schema".into(),
+            json_schema: JsonSchema {
+                name: "doc_summary".into(),
+                schema,
+            },
+        }),
+    })
+    .await?;
+
+    serde_json::from_str::<DocSummary>(&content).context("failed to parse structured summary response")
 }
 
 async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
@@ -226,19 +275,10 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
                 return Ok(());
             }
             let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
-            let title = title_for(client, cfg, &text).await?;
-            let summary = summary_for(client, cfg, &text).await?;
-            // Strip any H1 the model may have added despite instructions
-            let summary = summary
-                .lines()
-                .skip_while(|l| l.starts_with("# "))
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim_start()
-                .to_string();
-            println!("# {title}");
+            let doc_summary = title_and_summary_for(client, cfg, &text).await?;
+            println!("# {}", doc_summary.title);
             println!();
-            println!("{summary}");
+            println!("{}", doc_summary.summary);
         }
         None => {
             let docs = fetch_documents(client, cfg).await?;
