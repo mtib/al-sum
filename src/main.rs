@@ -14,11 +14,20 @@ struct Cli {
 enum Command {
     /// List available documents
     List,
-    /// Summarize documents. Without --doc: print [id] title for each. With --doc: print title + full summary.
+    /// Summarize documents. Without <doc>: print [id] title for each. With <doc>: print title + full summary.
     Summarize {
         /// Document ID to summarize in full (omit for title overview of all docs)
-        #[arg(long)]
         doc: Option<String>,
+    },
+    /// Show raw transcript entries for a document
+    Show {
+        doc: String,
+        /// Show timestamps per entry
+        #[arg(long)]
+        times: bool,
+        /// Show source (mic/system) per entry
+        #[arg(long)]
+        source: bool,
     },
     /// Search documents (hybrid text + semantic)
     Search {
@@ -64,6 +73,9 @@ struct DocumentsResponse {
 
 #[derive(Deserialize)]
 struct Entry {
+    source: String,
+    started_at: f64,
+    ended_at: f64,
     text: String,
 }
 
@@ -252,11 +264,10 @@ async fn cmd_list(client: &Client, cfg: &Config) -> Result<()> {
             snippet
         };
         println!(
-            "[{}] {} → {}  ({} entries)  {}",
+            "[{}] {} → {}  {}",
             doc.doc_id,
             format_time(doc.started_at),
             format_time(doc.ended_at),
-            doc.entry_count,
             snippet,
         );
     }
@@ -296,6 +307,25 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
                 println!("[{}] {} → {}  {}", doc.doc_id, format_time(doc.started_at), format_time(doc.ended_at), title);
             }
         }
+    }
+    Ok(())
+}
+
+async fn cmd_show(client: &Client, cfg: &Config, doc_id: &str, times: bool, source: bool) -> Result<()> {
+    let detail = fetch_document(client, cfg, doc_id).await?;
+    if detail.entries.is_empty() {
+        println!("(empty)");
+        return Ok(());
+    }
+    for entry in &detail.entries {
+        let mut prefix = String::new();
+        if times {
+            prefix.push_str(&format!("[{} → {}] ", format_time(entry.started_at), format_time(entry.ended_at)));
+        }
+        if source {
+            prefix.push_str(&format!("[{}] ", entry.source));
+        }
+        println!("{}{}", prefix, entry.text);
     }
     Ok(())
 }
@@ -343,6 +373,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::List => cmd_list(&client, &cfg).await,
         Command::Summarize { doc } => cmd_summarize(&client, &cfg, doc).await,
+        Command::Show { doc, times, source } => cmd_show(&client, &cfg, &doc, times, source).await,
         Command::Search { query, limit } => cmd_search(&client, &cfg, &query, limit).await,
     }
 }
