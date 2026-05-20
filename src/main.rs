@@ -70,6 +70,8 @@ struct Entry {
 #[derive(Deserialize)]
 struct DocumentDetail {
     doc_id: String,
+    started_at: f64,
+    ended_at: f64,
     entries: Vec<Entry>,
 }
 
@@ -223,7 +225,7 @@ async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Res
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a thorough summarizer. Return a JSON object with a short title (5-8 words, no trailing punctuation) and a comprehensive Markdown summary in the `summary` field. Use Markdown liberally: ## section headers for each topic (there MUST be at least one ## header), bullet lists for details, bold for key terms, and multiple paragraphs throughout. The summary MUST be a long multi-line string. Cover all topics, decisions, and details — do not truncate or omit anything significant.".into(),
+                content: "Du bist ein gründlicher Zusammenfasser. Antworte ausschließlich auf Deutsch. Gib ein JSON-Objekt zurück mit einem kurzen Titel (5-8 Wörter, kein abschließendes Satzzeichen) und einer umfassenden Markdown-Zusammenfassung im Feld `summary`. Nutze Markdown ausgiebig: ## Abschnittsüberschriften für jedes Thema (es MUSS mindestens eine ## Überschrift geben), Aufzählungslisten für Details, **Fettdruck** für Schlüsselbegriffe und mehrere Absätze. Die Zusammenfassung MUSS ein langer mehrzeiliger Text sein. Erfasse alle Themen, Entscheidungen und Details — kürze nichts ab.".into(),
             },
             ChatMessage { role: "user".into(), content: format!("Summarize this transcript:\n\n{}", text) },
         ],
@@ -278,6 +280,8 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
             let doc_summary = title_and_summary_for(client, cfg, &text).await?;
             println!("# {}", doc_summary.title);
             println!();
+            println!("_{} → {}_", format_time(detail.started_at), format_time(detail.ended_at));
+            println!();
             println!("{}", doc_summary.summary);
         }
         None => {
@@ -294,7 +298,7 @@ async fn cmd_summarize(client: &Client, cfg: &Config, doc_id: Option<String>) ->
                 }
                 let text = detail.entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join(" ");
                 let title = title_for(client, cfg, &text).await?;
-                println!("[{}] {}", doc.doc_id, title);
+                println!("[{}] {} → {}  {}", doc.doc_id, format_time(doc.started_at), format_time(doc.ended_at), title);
             }
         }
     }
