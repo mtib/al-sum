@@ -223,7 +223,7 @@ async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Res
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a concise summarizer. Return a JSON object with a short title (5-8 words, no trailing punctuation) and a Markdown summary using ## and below for any headers.".into(),
+                content: "You are a thorough summarizer. Return a JSON object with a short title (5-8 words, no trailing punctuation) and a comprehensive Markdown summary that covers all topics, decisions, and details discussed. Use ## and below for section headers. Do not truncate or omit anything significant.".into(),
             },
             ChatMessage { role: "user".into(), content: format!("Summarize this transcript:\n\n{}", text) },
         ],
