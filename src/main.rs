@@ -203,8 +203,18 @@ async fn title_for(client: &Client, cfg: &Config, text: &str) -> Result<String> 
     .await
 }
 
+fn strip_leading_h1(s: &str) -> &str {
+    let mut rest = s.trim_start();
+    if rest.starts_with("# ") {
+        if let Some(nl) = rest.find('\n') {
+            rest = rest[nl + 1..].trim_start();
+        }
+    }
+    rest
+}
+
 async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String> {
-    chat(client, cfg, ChatRequest {
+    let raw = chat(client, cfg, ChatRequest {
         model: cfg.openai_model.clone(),
         messages: vec![
             ChatMessage {
@@ -216,7 +226,8 @@ async fn summary_for(client: &Client, cfg: &Config, text: &str) -> Result<String
         stream: false,
         response_format: None,
     })
-    .await
+    .await?;
+    Ok(strip_leading_h1(&raw).to_string())
 }
 
 async fn title_and_summary_for(client: &Client, cfg: &Config, text: &str) -> Result<DocSummary> {
